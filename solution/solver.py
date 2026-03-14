@@ -1,5 +1,4 @@
 import json
-import random
 
 def calculate_lap_time(base_time, compound, tire_age, temp, guesses):
     speed_bonus = guesses[compound]["speed_bonus"]
@@ -7,13 +6,10 @@ def calculate_lap_time(base_time, compound, tire_age, temp, guesses):
     grace_period = guesses[compound]["grace_period"]
     temp_divisor = guesses["TEMP_DIVISOR"]
     
-    # NEW RULE: Tires don't degrade if they are within their grace period!
-    # If age is 3, and grace is 5, effective_age is 0. 
     effective_age = max(0, tire_age - grace_period)
-    
     temp_modifier = temp / temp_divisor
-    time_lost_to_wear = effective_age * deg_rate * temp_modifier
     
+    time_lost_to_wear = effective_age * deg_rate * temp_modifier
     return base_time + speed_bonus + time_lost_to_wear
 
 def simulate_test_race(race_data, guesses):
@@ -34,7 +30,6 @@ def simulate_test_race(race_data, guesses):
             total_time += calculate_lap_time(
                 config["base_lap_time"], current_tire, tire_age, config["track_temp"], guesses
             )
-            
             if lap in pit_stops:
                 total_time += config["pit_lane_time"]
                 current_tire = pit_stops[lap]["to_tire"]
@@ -45,61 +40,106 @@ def simulate_test_race(race_data, guesses):
     results.sort(key=lambda x: x["total_time"])
     return [r["driver_id"] for r in results]
 
-def run_robot_solver():
+def get_score(guesses, test_batch):
+    total_error = 0
+    for race in test_batch:
+        my_order = simulate_test_race(race, guesses)
+        actual_order = race["finishing_positions"]
+        for driver in actual_order:
+            my_pos = my_order.index(driver)
+            actual_pos = actual_order.index(driver)
+            total_error += abs(my_pos - actual_pos)
+    return total_error
+
+def run_hill_climber():
     print("Loading historical races...")
     with open('data/historical_races/races_00000-00999.json', 'r') as f:
         all_races = json.load(f)
         
-    # Test against 10 races to be extra sure!
-    test_batch = all_races[0:10] 
+    test_batch = all_races[0:250] 
     
-    best_score = 999999 
-
-    print("Starting the Ultimate Robot! Press Ctrl+C when the score hits 0.\n")
+    # We start exactly where your random robot left off
+    best_guesses = {
+        "SOFT":   {"speed_bonus": -1.252, "degradation_rate": 0.272, "grace_period": 4},
+        "MEDIUM": {"speed_bonus": -0.009, "degradation_rate": 0.151, "grace_period": 15},
+        "HARD":   {"speed_bonus":  0.172, "degradation_rate": 0.046, "grace_period": 12},
+        "TEMP_DIVISOR": 24.4
+    }
     
-    attempts = 0
+    best_score = get_score(best_guesses, test_batch)
+    print(f"Starting Score: {best_score}\n")
+    
+    # How big of a nudge to make on each attempt
+    step_sizes = {
+        "speed_bonus": 0.05,
+        "degradation_rate": 0.01,
+        "grace_period": 1,
+        "TEMP_DIVISOR": 0.5
+    }
+    
     while True:
-        attempts += 1
+        improved = False
         
-        # We give the robot wide bounds to find the new grace periods
-        test_guesses = {
-            "SOFT": {
-                "speed_bonus": round(random.uniform(-1.40, -1.20), 3),
-                "degradation_rate": round(random.uniform(0.23, 0.27), 3),
-                "grace_period": random.randint(1, 3) 
-            },
-            "MEDIUM": {
-                "speed_bonus": round(random.uniform(-0.25, -0.05), 3),
-                "degradation_rate": round(random.uniform(0.11, 0.15), 3),
-                "grace_period": random.randint(10, 14) 
-            },
-            "HARD": {
-                "speed_bonus": round(random.uniform(0.05, 0.20), 3),
-                "degradation_rate": round(random.uniform(0.05, 0.09), 3),
-                "grace_period": random.randint(13, 17) 
-            },
-            # Your last run found 26.6, so we search around there!
-            "TEMP_DIVISOR": round(random.uniform(25.0, 28.0), 1)
-        }
-        
-        total_error = 0
-        for race in test_batch:
-            my_order = simulate_test_race(race, test_guesses)
-            actual_order = race["finishing_positions"]
-            
-            for driver in actual_order:
-                my_pos = my_order.index(driver)
-                actual_pos = actual_order.index(driver)
-                total_error += abs(my_pos - actual_pos)
+        # Test adjusting each tire parameter up and down
+        for compound in ["SOFT", "MEDIUM", "HARD"]:
+            for param in ["speed_bonus", "degradation_rate", "grace_period"]:
+                original_value = best_guesses[compound][param]
+                step = step_sizes[param]
                 
-        if total_error < best_score:
-            best_score = total_error
-            print(f"--- NEW BEST SCORE: {best_score} (Attempt #{attempts}) ---")
-            print(json.dumps(test_guesses, indent=2))
+                # Test UP
+                best_guesses[compound][param] = original_value + step
+                up_score = get_score(best_guesses, test_batch)
+                
+                # Test DOWN
+                best_guesses[compound][param] = original_value - step
+                down_score = get_score(best_guesses, test_batch)
+                
+                # Keep whichever direction was best
+                if up_score < best_score and up_score <= down_score:
+                    best_score = up_score
+                    best_guesses[compound][param] = original_value + step
+                    improved = True
+                    print(f"Score dropped to {best_score}! ({compound} {param} -> {best_guesses[compound][param]:.3f})")
+                elif down_score < best_score and down_score < up_score:
+                    best_score = down_score
+                    improved = True
+                    print(f"Score dropped to {best_score}! ({compound} {param} -> {best_guesses[compound][param]:.3f})")
+                else:
+                    best_guesses[compound][param] = original_value # Undo if neither helped
+        
+        # Test adjusting Temperature Divisor
+        orig_temp = best_guesses["TEMP_DIVISOR"]
+        
+        best_guesses["TEMP_DIVISOR"] = orig_temp + step_sizes["TEMP_DIVISOR"]
+        up_score = get_score(best_guesses, test_batch)
+        
+        best_guesses["TEMP_DIVISOR"] = orig_temp - step_sizes["TEMP_DIVISOR"]
+        down_score = get_score(best_guesses, test_batch)
+        
+        if up_score < best_score and up_score <= down_score:
+            best_score = up_score
+            best_guesses["TEMP_DIVISOR"] = orig_temp + step_sizes["TEMP_DIVISOR"]
+            improved = True
+            print(f"Score dropped to {best_score}! (TEMP_DIVISOR -> {best_guesses['TEMP_DIVISOR']:.3f})")
+        elif down_score < best_score and down_score < up_score:
+            best_score = down_score
+            improved = True
+            print(f"Score dropped to {best_score}! (TEMP_DIVISOR -> {best_guesses['TEMP_DIVISOR']:.3f})")
+        else:
+            best_guesses["TEMP_DIVISOR"] = orig_temp
             
-            if best_score == 0:
-                print("\n🏆 PERFECT MATCH FOUND!")
+        # If the robot tested every parameter and NOTHING improved the score, it zooms in!
+        if not improved:
+            print("\n🔍 Hit a wall! Shrinking step sizes to zoom in closer...")
+            step_sizes["speed_bonus"] *= 0.5
+            step_sizes["degradation_rate"] *= 0.5
+            step_sizes["TEMP_DIVISOR"] *= 0.5
+            
+            # Once the adjustments get microscopically small, we stop!
+            if step_sizes["speed_bonus"] < 0.001:
+                print("\n🏆 OPTIMIZATION COMPLETE! Final perfect guesses:")
+                print(json.dumps(best_guesses, indent=2))
                 break
 
 if __name__ == "__main__":
-    run_robot_solver()
+    run_hill_climber()
