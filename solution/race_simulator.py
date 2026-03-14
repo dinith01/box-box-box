@@ -1,28 +1,28 @@
 import sys
 import json
 
-# Your new highly-optimized numbers!
+# Your brand new, highly accurate numbers!
 TIRE_MATH_GUESSES = {
-    "SOFT":   {"speed_bonus": -0.996, "degradation_rate": 0.200},
-    "MEDIUM": {"speed_bonus": -0.214, "degradation_rate": 0.077},
-    "HARD":   {"speed_bonus":  0.237, "degradation_rate": 0.041},
-    "TEMP_DIVISOR": 32.7
+    "SOFT":   {"speed_bonus": -1.236, "degradation_rate": 0.258, "grace_period": 3},
+    "MEDIUM": {"speed_bonus": -0.062, "degradation_rate": 0.145, "grace_period": 14},
+    "HARD":   {"speed_bonus":  0.161, "degradation_rate": 0.059, "grace_period": 14},
+    "TEMP_DIVISOR": 25.7
 }
 
 def calculate_lap_time(base_time, tire_compound, tire_age, track_temp):
     speed_bonus = TIRE_MATH_GUESSES[tire_compound]["speed_bonus"]
     deg_rate = TIRE_MATH_GUESSES[tire_compound]["degradation_rate"]
-    
-    # We now pull the divisor from your robot's guesses!
+    grace_period = TIRE_MATH_GUESSES[tire_compound]["grace_period"]
     temp_divisor = TIRE_MATH_GUESSES["TEMP_DIVISOR"]
     
-    # Calculate the penalty
+    # NEW RULE: Tires only degrade AFTER the grace period is over!
+    effective_age = max(0, tire_age - grace_period)
+    
+    # Calculate penalty
     temp_modifier = track_temp / temp_divisor
-    time_lost_to_wear = tire_age * deg_rate * temp_modifier
+    time_lost_to_wear = effective_age * deg_rate * temp_modifier
     
     return base_time + speed_bonus + time_lost_to_wear
-
-
 
 def simulate_race(input_data):
     config = input_data["race_config"]
