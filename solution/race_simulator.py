@@ -1,66 +1,71 @@
 import sys
 import json
 
-def simulate_race(input_data):
-    # 1. Get the track details (The "Track Rules")
-    config = input_data["race_config"]
-    total_laps = config["total_laps"]
-    base_time = config["base_lap_time"]
-    pit_time = config["pit_lane_time"]
-    
-    # 2. Get the drivers and their strategies
-    strategies = input_data["strategies"]
-    
-    results = [] # To store how fast each driver finishes
+# Your new highly-optimized numbers!
+TIRE_MATH_GUESSES = {
+    "SOFT":   {"speed_bonus": -0.996, "degradation_rate": 0.200},
+    "MEDIUM": {"speed_bonus": -0.214, "degradation_rate": 0.077},
+    "HARD":   {"speed_bonus":  0.237, "degradation_rate": 0.041},
+    "TEMP_DIVISOR": 32.7
+}
 
-    # 3. Simulate the race for each driver, one by one
+def calculate_lap_time(base_time, tire_compound, tire_age, track_temp):
+    speed_bonus = TIRE_MATH_GUESSES[tire_compound]["speed_bonus"]
+    deg_rate = TIRE_MATH_GUESSES[tire_compound]["degradation_rate"]
+    
+    # We now pull the divisor from your robot's guesses!
+    temp_divisor = TIRE_MATH_GUESSES["TEMP_DIVISOR"]
+    
+    # Calculate the penalty
+    temp_modifier = track_temp / temp_divisor
+    time_lost_to_wear = tire_age * deg_rate * temp_modifier
+    
+    return base_time + speed_bonus + time_lost_to_wear
+
+
+
+def simulate_race(input_data):
+    config = input_data["race_config"]
+    strategies = input_data["strategies"]
+    results = []
+
     for pos, strategy in strategies.items():
         driver_id = strategy["driver_id"]
+        current_tire = strategy["starting_tire"]
         
-        # We make a simple list of laps where this driver plans to stop
-        pit_stop_laps = []
-        for stop in strategy["pit_stops"]:
-            pit_stop_laps.append(stop["lap"])
+        # Convert pit stops into a dictionary so we can easily look up the lap
+        pit_stops = {stop["lap"]: stop for stop in strategy["pit_stops"]}
             
         total_time = 0.0
+        tire_age = 0
         
-        # 4. Run the laps!
-        for lap in range(1, total_laps + 1):
-            # Every lap takes the base lap time
-            total_time += base_time
+        for lap in range(1, config["total_laps"] + 1):
+            tire_age += 1 # Tires get 1 lap older
             
-            # If the driver stops this lap, add the pit stop time penalty
-            if lap in pit_stop_laps:
-                total_time += pit_time
+            # Use the Smart Math!
+            total_time += calculate_lap_time(
+                config["base_lap_time"], 
+                current_tire, 
+                tire_age, 
+                config["track_temp"]
+            )
+            
+            # Handle pit stops
+            if lap in pit_stops:
+                total_time += config["pit_lane_time"]
+                current_tire = pit_stops[lap]["to_tire"] # Put on new shoes
+                tire_age = 0 # Reset tire age to fresh
                 
-        # 5. Save the driver's final time
-        results.append({
-            "driver_id": driver_id,
-            "total_time": total_time
-        })
+        results.append({"driver_id": driver_id, "total_time": total_time})
 
-    # 6. Sort the results (lowest time wins!)
     results.sort(key=lambda x: x["total_time"])
     
-    # Extract just the driver IDs in their winning order
-    finishing_positions = []
-    for r in results:
-        finishing_positions.append(r["driver_id"])
-        
-    # 7. Package the final answer exactly as the rules require
     output = {
         "race_id": input_data["race_id"],
-        "finishing_positions": finishing_positions
+        "finishing_positions": [r["driver_id"] for r in results]
     }
     return output
 
 if __name__ == "__main__":
-    # Read the text file from standard input
-    input_json = sys.stdin.read()
-    input_data = json.loads(input_json)
-    
-    # Run our dumb simulator
-    final_result = simulate_race(input_data)
-    
-    # Print the final answer to standard output
-    print(json.dumps(final_result))
+    input_data = json.loads(sys.stdin.read())
+    print(json.dumps(simulate_race(input_data)))
